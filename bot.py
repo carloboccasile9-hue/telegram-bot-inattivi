@@ -188,15 +188,22 @@ async def ban_inactive_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Nessun utente idoneo al ban trovato (potrebbero essere tutti admin).")
 
 # --- AVVIO DEL BOT ---
-    setup_db()
-    app = Application.builder().token(TOKEN).build()
+   
+setup_db()
 
-    # Registrazione dei comandi e del tracciamento messaggi
-    app.add_handler(CommandHandler("verifica", verify_inactive_command))
-    app.add_handler(CommandHandler("ban_inattivi", ban_inactive_command))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, track_activity))
+application = Application.builder().token(TOKEN).build()
 
+application.add_handler(CommandHandler("verifica", verify_inactive_command))
+application.add_handler(CommandHandler("ban_inattivi", ban_inattivi_command))
+application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, track_activity))
+
+def run_bot():
     print("Bot in ascolto con comando di verifica...")
-    app.run_polling()
+    application.run_polling()
 
+Thread(target=run_bot, daemon=True).start()
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 

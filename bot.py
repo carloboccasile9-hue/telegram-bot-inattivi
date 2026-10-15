@@ -188,7 +188,6 @@ async def ban_inactive_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Nessun utente idoneo al ban trovato (potrebbero essere tutti admin).")
 
 # --- AVVIO DEL BOT ---
-def main():
     setup_db()
     app = Application.builder().token(TOKEN).build()
 
@@ -200,5 +199,4 @@ def main():
     print("Bot in ascolto con comando di verifica...")
     app.run_polling()
 
-if __name__ == '__main__':
-    main()
+

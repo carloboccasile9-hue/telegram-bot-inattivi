@@ -194,7 +194,7 @@ setup_db()
 application = Application.builder().token(TOKEN).build()
 
 application.add_handler(CommandHandler("verifica", verify_inactive_command))
-application.add_handler(CommandHandler("ban_inattivi", ban_inattivi_command))
+application.add_handler(CommandHandler("ban_inattivi", ban_inactive_command))
 application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, track_activity))
 
 def run_bot():

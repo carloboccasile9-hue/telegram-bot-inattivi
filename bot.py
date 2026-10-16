@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = "8852067927:AAHr5BAjwy8XIi2Y8taainBSN2p2Sma1W4c"
+TOKEN = os.environ.get("TOKEN")
 
 # --- INIZIALIZZAZIONE DATABASE ---
 def setup_db():

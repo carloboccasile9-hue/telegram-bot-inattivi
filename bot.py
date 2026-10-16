@@ -199,7 +199,7 @@ application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, track_act
 
 def run_bot():
     print("Bot in ascolto con comando di verifica...")
-    application.run_polling()
+    application.run_polling(stop_signals=None)
 
 Thread(target=run_bot, daemon=True).start()
 

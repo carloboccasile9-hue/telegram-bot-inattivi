@@ -1,24 +1,17 @@
 import os
-from flask import Flask
-from threading import Thread
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot attivo!"
-
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-Thread(target=run_web, daemon=True).start()
 import sqlite3
 from datetime import datetime, timedelta
+from flask import Flask
+from threading import Thread
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-TOKEN = os.environ.get("TOKEN")
+# --- CONFIGURAZIONE WEB SERVER (Flask per Render) ---
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Il bot Telegram è attivo e in esecuzione!"
 
 # --- INIZIALIZZAZIONE DATABASE ---
 def setup_db():
@@ -37,17 +30,23 @@ def setup_db():
     conn.commit()
     conn.close()
 
-# --- TRACCIAMENTO MESSAGGI ---
-async def track_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_chat or update.effective_chat.type not in ['group', 'supergroup']:
+# --- TRACCIAMENTO ATTIVITÀ ---
+async def track_activity(update: Update, context):
+    if not update.effective_user or not update.effective_chat:
         return
-
+    
     user = update.effective_user
+    chat = update.effective_chat
+    
+    # Ignora i messaggi nei canali o dove non c'è un utente valido
     if user.is_bot:
         return
 
-    chat_id = update.effective_chat.id
-    now = datetime.now()
+    user_id = user.id
+    chat_id = chat.id
+    username = user.username or ""
+    full_name = f"{user.first_name} {user.last_name or ''}".strip()
+    now = datetime.utcnow()
 
     conn = sqlite3.connect("activity.db")
     cursor = conn.cursor()
@@ -55,140 +54,85 @@ async def track_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
         INSERT INTO user_activity (user_id, chat_id, username, full_name, last_seen)
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(user_id, chat_id) DO UPDATE SET
-            username = excluded.username,
-            full_name = excluded.full_name,
-            last_seen = excluded.last_seen
-    ''', (user.id, chat_id, user.username, user.full_name, now))
+            username=excluded.username,
+            full_name=excluded.full_name,
+            last_seen=excluded.last_seen
+    ''', (user_id, chat_id, username, full_name, now))
     conn.commit()
     conn.close()
 
-# --- COMANDO DI VERIFICA (SOLO LISTA, NESSUN BAN) ---
-async def verify_inactive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_chat or update.effective_chat.type not in ['group', 'supergroup']:
-        await update.message.reply_text("Questo comando puo essere usato solo nei gruppi.")
+# --- COMANDO DI VERIFICA ---
+async def verify_inactive_command(update: Update, context):
+    if not update.effective_chat:
         return
 
-    chat = update.effective_chat
-    user_member = await chat.get_member(update.effective_user.id)
+    chat_id = update.effective_chat.id
+    args = context.args
     
-    if user_member.status not in ['administrator', 'creator']:
-        await update.message.reply_text("Solo gli amministratori possono usare questo comando.")
-        return
+    # Default: 30 giorni di inattività
+    days = 30
+    if args and args[0].isdigit():
+        days = int(args[0])
 
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text(
-            "Per favore specifica il numero di giorni (da 1 a 30).\n"
-            "Esempio: /verifica 7 (per vedere chi non scrive da 7 giorni)"
-        )
-        return
-
-    days = int(context.args[0])
-
-    if days < 1 or days > 30:
-        await update.message.reply_text("Puoi scegliere un valore compreso tra 1 e 30 giorni.")
-        return
-
-    cutoff_date = datetime.now() - timedelta(days=days)
+    threshold = datetime.utcnow() - timedelta(days=days)
 
     conn = sqlite3.connect("activity.db")
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT user_id, username, full_name, last_seen 
+        SELECT user_id, full_name, username, last_seen 
         FROM user_activity 
         WHERE chat_id = ? AND last_seen < ?
-    ''', (chat.id, cutoff_date))
+    ''', (chat_id, threshold))
     inactive_users = cursor.fetchall()
     conn.close()
 
-    if not inactive_users:
-        await update.message.reply_text(f"Nessun utente inattivo trovato da piu di {days} giorni.")
-        return
-
-    report = f"Utenti inattivi da piu di {days} giorni (nessun ban eseguito):\n\n"
-    for user_id, username, full_name, last_seen in inactive_users:
-        name = f"@{username}" if username else full_name
-        report += f"- {name} (Ultimo accesso: {last_seen})\n"
-
-    await update.message.reply_text(report)
-
-# --- COMANDO PER SCEGLIERE I GIORNI E BANNARE ---
-async def ban_inactive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_chat or update.effective_chat.type not in ['group', 'supergroup']:
-        await update.message.reply_text("Questo comando puo essere usato solo nei gruppi.")
-        return
-
-    chat = update.effective_chat
-    user_member = await chat.get_member(update.effective_user.id)
-    
-    if user_member.status not in ['administrator', 'creator']:
-        await update.message.reply_text("Solo gli amministratori possono usare questo comando.")
-        return
-
-    bot_member = await chat.get_member(context.bot.id)
-    if not bot_member.can_restrict_members:
-        await update.message.reply_text("Non ho i permessi per bannare gli utenti! Assicurati di darmi i permessi da amministratore per la gestione utenti.")
-        return
-
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text(
-            "Per favore specifica il numero di giorni (da 1 a 30).\n"
-            "Esempio: /ban_inattivi 7 (per bannare chi non scrive da 7 giorni)"
-        )
-        return
-
-    days = int(context.args[0])
-
-    if days < 1 or days > 30:
-        await update.message.reply_text("Puoi scegliere un valore compreso tra 1 e 30 giorni.")
-        return
-
-    cutoff_date = datetime.now() - timedelta(days=days)
-
-    conn = sqlite3.connect("activity.db")
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT user_id, username, full_name, last_seen 
-        FROM user_activity 
-        WHERE chat_id = ? AND last_seen < ?
-    ''', (chat.id, cutoff_date))
-    inactive_users = cursor.fetchall()
-    conn.close()
-
-    if not inactive_users:
-        await update.message.reply_text(f"Nessun utente inattivo da piu di {days} giorni.")
-        return
-
-    banned_count = 0
-    banned_list = []
-
-    for user_id, username, full_name, last_seen in inactive_users:
-        try:
-            member = await chat.get_member(user_id)
-            if member.status in ['administrator', 'creator'] or member.user.is_bot:
-                continue
-            
-            await chat.ban_member(user_id)
-            
-            conn = sqlite3.connect("activity.db")
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM user_activity WHERE user_id = ? AND chat_id = ?', (user_id, chat.id))
-            conn.commit()
-            conn.close()
-
-            name = f"@{username}" if username else full_name
-            banned_list.append(name)
-            banned_count += 1
-        except Exception as e:
-            print(f"Impossibile bannare l'utente {user_id}: {e}")
-
-    if banned_count > 0:
-        report = f"Pulizia inattivi completata ({days} giorni):\nBannati {banned_count} utenti:\n" + ", ".join(banned_list)
+    if inactive_users:
+        report = f"Utenti inattivi da più di {days} giorni:\n\n"
+        for user_id, full_name, username, last_seen in inactive_users:
+            uname = f"@{username}" if username else "Nessun username"
+            report.format()
+            report += f"- {full_name} ({uname}) - Ultima vista: {last_seen}\n"
         await update.message.reply_text(report)
     else:
-        await update.message.reply_text("Nessun utente idoneo al ban trovato (potrebbero essere tutti admin).")
+        await update.message.reply_text(f"Nessun utente inattivo trovato da oltre {days} giorni.")
+
+# --- COMANDO DI BAN INATTIVI ---
+async def ban_inactive_command(update: Update, context):
+    if not update.effective_chat:
+        return
+
+    chat_id = update.effective_chat.id
+    args = context.args
+    
+    days = 30
+    if args and args[0].isdigit():
+        days = int(args[0])
+
+    threshold = datetime.utcnow() - timedelta(days=days)
+
+    conn = sqlite3.connect("activity.db")
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, full_name FROM user_activity 
+        WHERE chat_id = ? AND last_seen < ?
+    ''', (chat_id, threshold))
+    inactive_users = cursor.fetchall()
+    conn.close()
+
+    banned_count = 0
+    for user_id, full_name in inactive_users:
+        try:
+            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            banned_count += 1
+        except Exception as e:
+            print(f"Impossibile bannare {user_id}: {e}")
+
+    await update.message.reply_text(f"Pulizia inattivi completata ({days} giorni):\nBannati {banned_count} utenti.")
+
+# --- LETTURA TOKEN DA VARIABILE D'AMBIENTE ---
+TOKEN = os.environ.get("TOKEN")
 
 # --- AVVIO DEL BOT ---
-   
 setup_db()
 
 application = Application.builder().token(TOKEN).build()
@@ -201,8 +145,10 @@ def run_bot():
     print("Bot in ascolto con comando di verifica...")
     application.run_polling(stop_signals=None)
 
+# Avviamo il bot Telegram in un thread separato
 Thread(target=run_bot, daemon=True).start()
+
+# Avviamo il web server per Render
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=10000, use_reloader=False)
-
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
